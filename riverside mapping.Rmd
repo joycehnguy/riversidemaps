@@ -1,0 +1,478 @@
+---
+title: "riverside_mapping"
+author: "Joyce Nguy"
+date: "2023-05-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+---
+title: "datacamp_data_import_projections"
+author: "Joyce Nguy"
+date: "2023-05-18"
+output: pdf_document
+---
+
+##Load Packages
+
+```{r cars}
+library(sp)
+library(rgdal)
+library(tigris)
+```
+#Load in Census Data 
+```{r}
+census_2020 <-read_csv("/Users/student1/Downloads/census_2020.csv")
+```
+
+#cleaning data 
+
+```{r}
+library(tidyverse)
+library(dplyr)
+latino_cvap <- cvap_2020%>% 
+  mutate(hispanic_cvap = Hsp_CIT_19) %>% 
+  dplyr::select(BLOCK20, hispanic_cvap)
+
+#census_2020$Geo_FIPS <- paste0("0", census_2020 $Geo_FIPS)  
+
+census_2020 <- census_2020 %>% 
+  mutate(hisp = SE_T028_001, 
+         total_pop = SE_T028_000)
+
+latino_census <- census_2020 %>%  
+  dplyr::select(Geo_FIPS, Geo_CT, hisp, total_pop) %>% 
+  mutate(percent_hispanic = (hisp/total_pop)*100)
+
+```
+
+
+## Getting Census Tract Boundary Data using Tigris
+
+```{r pressure, echo=FALSE}
+
+# Call tracts(): riverside_blocks
+riverside_tracts <- tracts(state = "CA", county = "Riverside")
+
+# Plot 
+plot(riverside_tracts)
+
+str(riverside_tracts)
+
+
+```
+#Merge tracts with census data
+```{r}
+typeof(latino_census$Geo_CT)
+typeof(riverside_tracts$TRACTCE)
+options(scipen = 999)
+
+#latino_census$Geo_FIPS <- paste0("0", latino_census$Geo_FIPS)
+
+any(duplicated(latino_census$Geo_CT))
+any(duplicated(riverside_tracts$TRACTCE))
+
+all(riverside_tracts$TRACTCE %in% latino_census$Geo_CT)
+all(latino_census$Geo_CT %in% riverside_tracts$TRACTCE)
+riverside_tracts_merge <- merge(riverside_tracts, latino_census, by.x="TRACTCE", by.y = "Geo_CT")
+
+map_data <- merge(riverside_tracts, latino_census, by.x = "TRACTCE", by.y = "Geo_CT", all.x = TRUE)
+```
+
+#Regular Chloropleth Map
+```{r}
+# Plot the chloropleth map
+ggplot() +
+  geom_sf(data = map_data, aes(fill = percent_hispanic)) +
+  scale_fill_gradient(low = "white", high = "blue") +
+  labs(title = "Percentage of Hispanics in Riverside County",
+       fill = "Percent Hispanic") +
+  theme_minimal()
+```
+
+#overlay
+```{r}
+#Mapping the Supervisory Districts
+
+library(raster)
+supervisory_district<-shapefile("Supervisorial_Districts_2021")
+plot(supervisory_district)
+
+library(RColorBrewer)
+library(sf)
+
+#make this an sf object
+supervisory_district <- st_as_sf(supervisory_district)
+```
+
+
+```{r}
+#Check CRS
+st_crs(map_data)
+st_crs(supervisory_district)
+
+# Transform CRS if needed
+supervisory_district <- st_transform(supervisory_district, crs = st_crs(map_data))
+
+#map
+map <- ggplot() +
+  geom_sf(data = riverside_tracts_merge, aes(fill = percent_hispanic), color = "grey") +
+  geom_sf(data = supervisory_district, fill = NA, color = "black", size = 3) +
+  coord_sf() +
+  labs(title = "Percentage of Latinos in Riverside County",
+       subtitle = "Census Tracts",
+       fill = "Percent Latino") +
+  scale_fill_gradientn(colors = brewer.pal(9, "YlOrRd"),
+                       breaks = c(25, 50, 75, 100),
+                       labels = c(25, 50, 75, 100),
+                       limits = c(0, 100)) +
+  theme_bw() +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        legend.background = element_rect(color = "black", fill = "white"),
+        legend.box.background = element_rect(color = "black", fill = "white"),
+        legend.key = element_rect(color = "black", fill = "white"))
+
+# Display the map
+map
+
+ggsave("riverside_latino_map.png", plot = map, width = 10, height = 8, dpi = 300)
+
+```
+
+
+#CVAP MAP 
+
+```{r}
+#Load in Census Data 
+cvap_2020 <- read_csv("/Users/student1/Downloads/Riverside Mapping/cvap_2020.csv")
+names(cvap_2020)
+```
+
+#Clean Data
+
+```{r}
+library(dplyr)
+#filter for riverside county by tract
+filtered_data <- cvap_2020 %>%
+  filter(str_detect(geoname, "Riverside County"))
+
+# View the filtered data
+View(filtered_data)
+
+#filter for hispanic and latino, create latino percentage
+filtered_data <- filtered_data %>%
+  filter(lntitle %in% c("Hispanic or Latino", "Total")) %>%
+  group_by(geoid) %>%
+  mutate(percentage_hispanic = cvap_est[lntitle == "Hispanic or Latino"] / cvap_est[lntitle == "Total"] * 100) #%>%
+#  filter(!is.na(percentage_hispanic))
+#2 NA Tracts 
+
+# View the resulting data
+View(filtered_data)
+
+#distinct geoid
+filtered_data <- filtered_data %>%
+  distinct(geoid, .keep_all = TRUE)
+
+##make a tract column with last 6 digits 
+filtered_data$tract <- substr(filtered_data$geoid, nchar(filtered_data$geoid) - 5, nchar(filtered_data$geoid))
+
+# View the resulting data
+View(filtered_data)
+```
+
+
+##MAP the CVAP 2020 data 
+
+```{r}
+any(duplicated(filtered_data$tract))
+any(duplicated(riverside_tracts$TRACTCE))
+
+all(riverside_tracts$TRACTCE %in%filtered_data$tract )
+all(filtered_data$tract %in% riverside_tracts$TRACTCE)
+
+cvap_map_data <- merge(riverside_tracts, filtered_data, by.x = "TRACTCE", by.y = "tract", all.x = TRUE)
+
+# Transform CRS if needed
+supervisory_district <- st_transform(supervisory_district, crs = st_crs(cvap_map_data))
+
+#map
+cvap_map <- ggplot() +
+  geom_sf(data = cvap_map_data, aes(fill = percentage_hispanic), color = "grey") +
+  geom_sf(data = supervisory_district, fill = NA, color = "black", size = 3) +
+  coord_sf() +
+  labs(title = "Percentage of Latinos in Riverside County - Citizen Voting Age Population",
+       subtitle = "Census Tracts",
+       fill = "Percent Latino") +
+  scale_fill_gradientn(colors = brewer.pal(9, "YlOrRd"),
+                       breaks = c(25, 50, 75, 100),
+                       labels = c(25, 50, 75, 100),
+                       limits = c(0, 100)) +
+  theme_bw() +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        legend.background = element_rect(color = "black", fill = "white"),
+        legend.box.background = element_rect(color = "black", fill = "white"),
+        legend.key = element_rect(color = "black", fill = "white"))
+
+# Display the map
+cvap_map
+
+ggsave("riverside_latino_cvap_map.png", plot = cvap_map, width = 10, height = 8, dpi = 300)
+
+```
+
+
+Tmap
+```{r}
+library(tmap)
+
+# Convert the merged data to a tm object
+tm_data <- tm_shape(riverside_tracts_merge) +
+  tm_polygons(col = "percent_hispanic", palette = "Blues", title = "Percent Hispanic") +
+  tm_layout(main.title = "Percentage of Hispanics in Riverside County",
+            legend.outside = TRUE,
+            legend.position = c("right", "bottom"))
+
+# Customize the legend box
+tm_data <- tm_data +
+  tm_legend(outside = TRUE, 
+            bg.color = "white",
+            frame = TRUE,
+            legend.outside.size = 0.5,
+            title.size = 0.9,
+            title.bg.color = "white")
+
+# Display the map
+tm_view(tm_data)
+
+#save
+tmap_save(tm_data, filename = "riverside_map.png")
+
+```
+
+
+
+
+## Tidycensus? 
+
+```{r}
+# look up variables 
+variables <- load_variables(year = 2020, dataset = "pl")
+acs_variables <- load_variables(year = 2015, dataset = "acs5")
+library(tidycensus)
+riverside_race <- get_decennial(
+  geography = "tract",
+  state = "CA",
+  county = "Riverside",
+  variables = c(Hispanic = "P2_002N"),
+  summary_var = "P2_001N",
+  year = 2020,
+  geometry = TRUE
+) %>%
+  mutate(percent = 100 * (value / summary_value))
+```
+
+
+```{r}
+library(tmap)
+base_map <- tm_shape(riverside_race) + 
+  tm_polygons(col = "percent",
+          style = "quantile",
+          n = 5,
+          palette = "Purples",
+          title = "2020 US Census") + 
+  tm_layout(title = "Pct Latino in Census Tract",
+            frame = FALSE,
+            legend.outside = TRUE)
+
+str(base_map)
+```
+
+
+
+
+##Riverside Mapping by Block 
+
+```{r}
+#create riverside blocks 
+riverside_blocks <- blocks(state = "CA", county = "Riverside")
+
+# Plot 
+plot(riverside_blocks)
+
+str(riverside_blocks)
+```
+
+#Load in the Block Data from Statewide District - Adjusted
+```{r}
+adjusted_data <- read_csv("/Users/student1/Downloads/Riverside Mapping/county_065_PL94_2020_Adjusted_P24_DOJ_Block_csv/riverside_block_adjusted.csv")
+
+#create percentage hispanic
+adjusted_data <- adjusted_data %>%
+  mutate(percentage_hispanic = (`Hispanic Origin` / `Population P2`) * 100)
+
+names(adjusted_data)
+
+
+any(duplicated(adjusted_data$BLOCK20))
+any(duplicated(riverside_blocks$GEOID20))
+
+all(riverside_blocks$GEOID20 %in%adjusted_data$BLOCK20 )
+all(adjusted_data$BLOCK20  %in% riverside_blocks$GEOID20)
+
+adjusted_map_data <- merge(riverside_blocks, adjusted_data, by.x = "GEOID20", by.y = "BLOCK20", all.x = TRUE)
+
+# Transform CRS if needed
+supervisory_district <- st_transform(supervisory_district, crs = st_crs(adjusted_map_data))
+
+#map
+adjusted_map <- ggplot() +
+  geom_sf(data = adjusted_map_data, aes(fill = percentage_hispanic), color = "grey") +
+  geom_sf(data = supervisory_district, fill = NA, color = "black", size = 3) +
+  coord_sf() +
+  labs(title = "Percentage of Latinos in Riverside County",
+       subtitle = "By Census Block",
+       fill = "Percent Latino") +
+  scale_fill_gradientn(colors = brewer.pal(9, "YlOrRd"),
+                       breaks = c(25, 50, 75, 100),
+                       labels = c(25, 50, 75, 100),
+                       limits = c(0, 100), 
+                       na.value = "white") +  # Set NaN values to white+
+  theme_bw() +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        legend.background = element_rect(color = "black", fill = "white"),
+        legend.box.background = element_rect(color = "black", fill = "white"),
+        legend.key = element_rect(color = "black", fill = "white"))
+
+# Display the map
+
+sum(is.na(adjusted_data$percentage_hispanic))
+sum(is.na(adjusted_data$percentage_hispanic) | is.nan(adjusted_data$percentage_hispanic))
+
+ggsave("riverside_adjusted_map.png", plot = adjusted_map, width = 10, height = 8, dpi = 300)
+```
+
+#Map Raw
+
+```{r}
+adjusted_map <- ggplot() +
+  geom_sf(data = adjusted_map_data, aes(fill = `Hispanic Origin`), color = "grey") +
+  geom_sf(data = supervisory_district, fill = NA, color = "black", size = 3) +
+  coord_sf() +
+  labs(title = "Number of Hispanics in Riverside County",
+       subtitle = "By Census Block") +
+  scale_fill_gradientn(colors = brewer.pal(9, "YlOrRd"),
+                       breaks = c(0, 250, 500, 750, 1000, 1250, 1500, 1750, 2000),
+                       limits = c(0, 2050)) +
+  theme_bw() +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        legend.background = element_rect(color = "black", fill = "white"),
+        legend.box.background = element_rect(color = "black", fill = "white"),
+        legend.key = element_rect(color = "black", fill = "white"))
+
+ggsave("riverside_adjusted_map_raw_count.png", plot = adjusted_map, width = 10, height = 8, dpi = 300)
+
+```
+
+#create dot density map 
+
+```{r}
+# Convert data to SpatialPointsDataFrame
+adjusted_points <- adjusted_map_data %>%
+  st_as_sf() %>%
+  st_centroid() %>%
+  st_coordinates() %>%
+  as.data.frame()
+
+# Rename coordinates columns
+names(adjusted_points) <- c("x", "y")
+
+# Combine adjusted_map_data with adjusted_points
+adjusted_map_data <- bind_cols(adjusted_map_data, adjusted_points)
+
+# Create dot density map
+# Adjust colors based on count of Latinos
+# Adjust colors based on count of Latinos
+dot_map <- ggplot() +
+  geom_sf(data = adjusted_map_data, fill = NA, color = "grey") +
+  geom_sf(data = supervisory_district, fill = NA, color = "black", size = 3) +
+  geom_point(data = adjusted_map_data, aes(x = x, y = y, color = `Hispanic Origin`), size = 0.5, alpha = adjusted_map_data$`Hispanic Origin`/max(adjusted_map_data$`Hispanic Origin`)) +
+  coord_sf() +
+  labs(title = "Number of Hispanics in Riverside County",
+       subtitle = "By Census Block") +
+  scale_color_gradient(low = "lavender", high = "purple") +
+  theme_bw() +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        legend.position = "none")
+
+dot_map
+
+
+
+```
+#Remove Census Boundaries
+
+```{r}
+adjusted_map_no_bound <- ggplot() +
+  geom_sf(data = adjusted_map_data, aes(fill = percentage_hispanic), color = "transparent") +
+  geom_sf(data = supervisory_district, fill = NA, color = "black", size = 3) +
+  coord_sf() +
+  labs(title = "Percentage of Latinos in Riverside County",
+       subtitle = "By Census Block",
+       fill = "Percent Latino") +
+  scale_fill_gradientn(colors = brewer.pal(9, "YlOrRd"),
+                       breaks = c(25, 50, 75, 100),
+                       labels = c(25, 50, 75, 100),
+                       limits = c(0, 100), 
+                       na.value = "white") +
+  theme_bw() +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        legend.background = element_rect(color = "black", fill = "white"),
+        legend.box.background = element_rect(color = "black", fill = "white"),
+        legend.key = element_rect(color = "black", fill = "white"))
+
+adjusted_map_no_bound
+
+ggsave("adjusted_map_no_boundt.png", plot = adjusted_map_no_bound, width = 10, height = 8, dpi = 300)
+
+```
+
